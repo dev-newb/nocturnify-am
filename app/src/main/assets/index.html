@@ -1,0 +1,56 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Nocturnify</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+
+<div id="setup" hidden>
+  <h1>One-time setup</h1>
+  <p id="setup-why">This build has no MusicKit developer token.</p>
+  <ol>
+    <li>On the Mac: <code>node tools/make-token.mjs --key ~/.config/nocturnify-am/AuthKey_KEYID.p8 --team TEAMID</code></li>
+    <li>Rebuild and reinstall.</li>
+  </ol>
+</div>
+
+<div id="login" hidden>
+  <div class="logo"></div>
+  <h1>Nocturnify</h1>
+  <button id="login-btn" class="item focused">Sign in to Apple Music</button>
+  <p class="hint">Sign in with your Apple Account on the next screen.<br>Arrows move between fields, OK opens the keyboard, Back cancels.</p>
+</div>
+
+<div id="app" hidden>
+  <nav id="side">
+    <div class="item" data-nav="home">For You</div>
+    <div class="item" data-nav="playlists">Playlists</div>
+    <div class="item" data-nav="albums">Albums</div>
+    <div class="item" data-nav="songs">Songs</div>
+    <div class="item" data-nav="radio">Radio</div>
+    <div class="item" data-nav="charts">Charts</div>
+    <div class="item" data-nav="search">Search</div>
+    <div class="item" data-nav="queue">Up Next</div>
+    <div class="item" data-nav="viz">Visualizer</div>
+    <div class="item" data-nav="shuffle">Shuffle: Off</div>
+    <div class="item" data-nav="autoplay">Autoplay: On</div>
+    <div class="spacer"></div>
+    <div class="item" data-nav="logout">Sign out</div>
+  </nav>
+  <main id="main"><div class="title">Loading…</div></main>
+  <footer id="now">
+    <img id="now-art" alt="">
+    <div id="now-text"><div id="now-title">Nothing playing</div><div id="now-artist"></div></div>
+    <div id="now-love"></div>
+    <div id="now-state">▶</div>
+    <div id="now-status"></div>
+    <div id="now-bar"><div id="now-fill"></div></div>
+  </footer>
+</div>
+
+<div id="viz" hidden></div>
+<div id="toast" hidden></div>
+
+<script src="config.js"></script>
+<script src="viz.js"></script>
+<script src="app.js"></script>
+<script src="https://js-cdn.music.apple.com/musickit/v3/musickit.js"></script>
+</body></html>
