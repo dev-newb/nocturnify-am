@@ -1,3 +1,5 @@
+<img src="docs/brand/banner.png" alt="Nocturnify AM" width="320">
+
 # Nocturnify AM
 
 Lightweight Apple Music for Android TV — the Apple Music sibling of [Nocturnify](https://github.com/dev-newb/nocturnify),
