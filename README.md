@@ -95,6 +95,11 @@ The token expires after six months; the app says so on screen. Re-run step 3 and
   but never plays. For the same reason a video is skipped out of half a second before its end
   rather than run out, and a video that stalls anyway gets its song put back, which then swaps
   the working way.
+- MusicKit's own error dialog is suppressed (`suppressErrorDialog`): it focuses its buttons, but
+  the remote's OK and arrows go to the app underneath, so it could never be dismissed. Playback
+  errors get the app's own notice instead. "More than one device is trying to play music" (your
+  account streaming elsewhere) offers **Play on this TV**, which takes the stream back, or **Not
+  now**; Back closes it. Any MusicKit dialog that still appears answers to the D-pad and Back.
 - Lyrics: Apple's lyrics endpoints answer "Insufficient Permissions" for this app's developer
   token, signed in or not — Apple reserves them.
 - `MainActivity` replaces WebView's default video poster (a big grey play button shown over any

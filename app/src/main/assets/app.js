@@ -793,9 +793,69 @@
   }
 
   const isOk = e => e.key === 'Enter' || e.key === 'Spacebar' || e.keyCode === 13 || e.keyCode === 23;
+
+  // ---------- Notices ----------
+  // Playback problems that need an answer, drawn here rather than by MusicKit: its own dialog
+  // (suppressed in configure) can't be reached with the D-pad — OK and the arrows land on the
+  // app underneath — so it sat on screen for good.
+  const notice = { open: false, idx: 0, actions: [] };
+  function showNotice(title, text, actions) {
+    $('#notice-title').textContent = title;
+    $('#notice-text').textContent = text || '';
+    const box = $('#notice-actions');
+    box.innerHTML = '';
+    notice.actions = actions.map(a => { const b = el('button', '', esc(a.label)); box.append(b); return { ...a, b }; });
+    notice.idx = 0; notice.open = true;
+    $('#notice').hidden = false;
+    noticeFocus();
+  }
+  const noticeFocus = () => notice.actions.forEach((a, i) => a.b.classList.toggle('focused', i === notice.idx));
+  function closeNotice(i) {                           // i: the action chosen, -1 for Back
+    if (!notice.open) return;
+    notice.open = false;
+    $('#notice').hidden = true;
+    notice.actions[i]?.fn?.();
+  }
+  function noticeKey(e) {
+    const k = e.key, n = notice.actions.length;
+    if (k === 'ArrowLeft' || k === 'ArrowUp') { notice.idx = Math.max(0, notice.idx - 1); noticeFocus(); }
+    else if (k === 'ArrowRight' || k === 'ArrowDown') { notice.idx = Math.min(n - 1, notice.idx + 1); noticeFocus(); }
+    else if (isOk(e)) closeNotice(notice.idx);
+    e.preventDefault();
+  }
+  function playbackError(e) {
+    const err = e?.reason ? e : e?.error || e;
+    const m = err?.message || err?.reason || String(err);
+    status('playback: ' + m);
+    console.log('[mk] playback error', JSON.stringify(err));
+    // Apple's own dialog for this adds a Family-plan upsell; the choice that matters on a TV is
+    // whether to take the stream back (the other device then stops).
+    if (err?.reason === 'DEVICE_LIMIT' || /more than one device|another device/i.test(m)) {
+      showNotice(err?.dialog?.message || 'Apple Music is playing on another device', 'Your account plays on one device at a time.',
+        [{ label: 'Play on this TV', fn: () => setPlaying(true) }, { label: 'Not now' }]);
+    } else showNotice(err?.dialog?.message || 'Playback stopped', err?.dialog?.explanation || m, [{ label: 'OK' }]);
+  }
+  // A dialog MusicKit still draws itself (#musickit-dialog, e.g. from sign-in): the D-pad moves
+  // between its buttons, OK presses one, Back closes it.
+  function mkDialogKey(e) {
+    const d = document.getElementById('musickit-dialog');
+    if (!d) return false;
+    const bs = [...d.querySelectorAll('button')];
+    let i = bs.indexOf(document.activeElement);
+    if (i < 0) { i = 0; bs[0]?.focus(); }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') bs[Math.max(0, i - 1)]?.focus();
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') bs[Math.min(bs.length - 1, i + 1)]?.focus();
+    else if (isOk(e)) bs[i]?.click();
+    e.preventDefault();
+    return true;
+  }
+  const mkDialogClose = () => ['musickit-dialog', 'musickit-dialog-scrim'].forEach(id => document.getElementById(id)?.remove());
+
   document.addEventListener('keydown', e => {
     resetIdle();
     const k = e.key;
+    if (notice.open) { noticeKey(e); return; }       // a notice owns the remote until answered
+    if (mkDialogKey(e)) return;
     if (screen === 'viz') {
       if (isOk(e) || k === 'MediaPlayPause') togglePlay();
       else if (k === 'ArrowRight' || k === 'MediaTrackNext') next();
@@ -826,6 +886,7 @@
   // Called from MainActivity for remote transport keys (Android keycodes) and Back.
   window.onTvKey = (code, down = true) => {
     if (!down) return;
+    if (notice.open && (code === 85 || code === 126)) closeNotice(-1);   // play answers it too
     if (code === 90) return seekBy(5000);
     if (code === 89) return seekBy(-5000);
     ({ 85: togglePlay, 126: () => setPlaying(true), 127: () => setPlaying(false), 87: next, 88: prev, 86: () => setPlaying(false),
@@ -836,6 +897,8 @@
     })[code]?.();
   };
   window.onTvBack = () => {
+    if (notice.open) { closeNotice(-1); return true; }
+    if (document.getElementById('musickit-dialog')) { mkDialogClose(); return true; }
     if (screen === 'viz') { closeViz(); return true; }
     if (document.activeElement?.tagName === 'INPUT') { document.activeElement.blur(); return true; }
     if (backStack.length) { const b = backStack.pop(); go(b.v, { back: true, idx: b.idx }); return true; }
@@ -900,6 +963,7 @@
     try {
       music = await MusicKit.configure({
         developerToken: CONFIG.developerToken,
+        suppressErrorDialog: true,                     // playbackError() shows a remote-friendly notice instead
         app: { name: CONFIG.appName || 'Nocturnify', build: '0.1' },
         features: [gaplessPref() ? 'seamless-audio-transitions' : '-seamless-audio-transitions'],   // see toggleGapless
       });
@@ -918,7 +982,7 @@
       if (Date.now() < holdUntil && playing()) music.pause();   // sleep timer: hold the next song
       renderNow(); pushNative();
     });
-    music.addEventListener('mediaPlaybackError', e => { const m = e?.message || e?.reason || String(e); status('playback: ' + m); console.log('[mk] playback error', JSON.stringify(e)); });
+    music.addEventListener('mediaPlaybackError', playbackError);
     music.addEventListener('timedMetadataDidChange', e => {
       // Live radio songs arrive as ID3 / HLS metadata; log the shape until it's pinned down.
       console.log('[mk] timed metadata', JSON.stringify(e).slice(0, 300));
