@@ -872,8 +872,8 @@
   // text just enough to bring everything back, rather than letting Sign out fall off.
   function fitSide() {
     const side = $('#side');
-    let px = 26;
-    side.style.fontSize = '';
+    let px = 32;
+    side.style.fontSize = px + 'px';
     while (side.scrollHeight > side.clientHeight + 1 && px > 12) side.style.fontSize = (px -= 0.5) + 'px';
     console.log('[side] font', px, side.scrollHeight, '/', side.clientHeight);
   }

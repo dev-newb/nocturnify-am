@@ -11,8 +11,10 @@ h1 { font-size:44px; margin:0 0 24px } p, ol { color:var(--dim); font-size:24px 
 #login .hint { text-align:center; margin-top:28px; font-size:20px }
 button { font:inherit; color:inherit; background:var(--panel2); border:0; border-radius:40px; padding:16px 44px }
 
-#app { display:grid; grid-template-columns:300px 1fr; grid-template-rows:minmax(0,1fr) 140px; height:100%; padding:8vh 6vw 0 6vw }
-#side { display:flex; flex-direction:column; gap:2px; padding-right:24px; border-right:1px solid #2a2a2a; min-height:0; overflow:hidden }
+/* the sidebar runs the full height beside both the main area and the footer, and is only as wide
+   as its longest label, so the divider sits just past the text */
+#app { display:grid; grid-template-columns:max-content 1fr; grid-template-rows:minmax(0,1fr) auto; height:100%; padding:8vh 6vw 0 6vw }
+#side { grid-row:1 / -1; display:flex; flex-direction:column; gap:.2em; padding:0 18px 5vh 0; border-right:1px solid #2a2a2a; min-height:0; overflow:hidden }
 #side .spacer { flex:1 }
 #main { overflow:hidden; min-height:0; padding:0 24px 0 32px }
 #main .title { font-size:36px; font-weight:700; margin-bottom:16px; color:var(--fg) }
@@ -27,12 +29,15 @@ button { font:inherit; color:inherit; background:var(--panel2); border:0; border
 .item.playing .t { color:var(--accent) }
 .empty { color:var(--dim); padding:20px 0 }
 
-#now { grid-column:1 / -1; display:grid; grid-template-columns:96px 1fr auto auto auto auto; grid-template-rows:1fr 6px; align-items:center; gap:0 24px; border-top:1px solid #2a2a2a; padding-top:12px }
-#now-art { width:80px; height:80px; border-radius:8px; background:#333; grid-row:1 }
+/* just the cover's height plus the progress line; the bottom padding keeps that line out of overscan */
+#now { grid-column:2; margin-left:32px; display:grid; grid-template-columns:64px 1fr auto auto auto auto; grid-template-rows:auto 6px; align-items:center; gap:0 20px; border-top:1px solid #2a2a2a; padding:10px 0 4vh }
+#now-art { width:64px; height:64px; border-radius:6px; background:#333; grid-row:1 }
+#now-text { min-width:0 }   /* one line each, trimmed: a wrapped line made the footer taller */
+#now-title, #now-artist { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
 #now-title { font-weight:600 } #now-artist { color:var(--dim); font-size:22px }
 #now-state { font-size:34px; color:var(--accent) }
-#now-status { color:#777; font-size:18px; max-width:400px; text-align:right; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }
-#now-bar { grid-column:1 / -1; height:6px; background:#333; border-radius:3px; margin-top:8px } #now-fill { height:100%; width:0; background:var(--accent); border-radius:3px }
+#now-status { color:#777; font-size:18px; max-width:260px; text-align:right; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }
+#now-bar { grid-column:1 / -1; height:6px; background:#333; border-radius:3px; margin-top:10px } #now-fill { height:100%; width:0; background:var(--accent); border-radius:3px }
 
 /* full-screen visualiser overlay; canvas is 1280x720 internally and GPU-scaled to the panel */
 #viz { position:fixed; inset:0; background:#07070b; z-index:50 }
@@ -60,10 +65,11 @@ button { font:inherit; color:inherit; background:var(--panel2); border:0; border
 
 /* Sidebar focus: solid accent pill rather than dark fill + accent edge bar.
    White semibold on #fa2d48 is ~3.9:1 — past the 3:1 bar for text this large (26px). */
-#side .item { border-left:0; padding:2px 14px; line-height:1.15; flex:none }
-/* The WebView lays out at 960x540 CSS px, which leaves ~357px for twelve entries. flex:none keeps
-   each at its natural height — letting flex shrink them is what overlapped the text before — and
-   fitSide() (app.js) then picks the largest font at which all of them fit. */
+#side .item { border-left:0; padding:.12em .55em; line-height:1.15; flex:none }
+/* The WebView lays out at 960x540 CSS px; full height, the sidebar has ~470px. flex:none keeps
+   each entry at its natural height — letting flex shrink them is what overlapped the text before —
+   and fitSide() (app.js) picks the largest font at which all of them fit. Spacing is in em so it
+   scales with that font. */
 #side .item.focused { background:var(--accent); color:#fff; font-weight:600 }
 
 /* Android WebView paints an orange UA focus ring outside the element box, which is both
