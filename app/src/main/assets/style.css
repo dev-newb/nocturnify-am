@@ -27,7 +27,7 @@ button { font:inherit; color:inherit; background:var(--panel2); border:0; border
 .item.playing .t { color:var(--accent) }
 .empty { color:var(--dim); padding:20px 0 }
 
-#now { grid-column:1 / -1; display:grid; grid-template-columns:96px 1fr auto auto auto; grid-template-rows:1fr 6px; align-items:center; gap:0 24px; border-top:1px solid #2a2a2a; padding-top:12px }
+#now { grid-column:1 / -1; display:grid; grid-template-columns:96px 1fr auto auto auto auto; grid-template-rows:1fr 6px; align-items:center; gap:0 24px; border-top:1px solid #2a2a2a; padding-top:12px }
 #now-art { width:80px; height:80px; border-radius:8px; background:#333; grid-row:1 }
 #now-title { font-weight:600 } #now-artist { color:var(--dim); font-size:22px }
 #now-state { font-size:34px; color:var(--accent) }
@@ -37,6 +37,12 @@ button { font:inherit; color:inherit; background:var(--panel2); border:0; border
 /* full-screen visualiser overlay; canvas is 1280x720 internally and GPU-scaled to the panel */
 #viz { position:fixed; inset:0; background:#07070b; z-index:50 }
 #viz canvas { width:100%; height:100%; display:block }
+/* back to front: visuals, the music video, cover + info. The video fills the screen's height or
+   width, whichever it meets first, and is never stretched; the visuals show in any bars. */
+#viz .viz-main, #viz .viz-over, #apple-music-video-container { position:absolute; inset:0 }
+#apple-music-video-container { z-index:1; visibility:hidden }
+#viz .viz-over { z-index:2 }
+#apple-music-video-container video { width:100% !important; height:100% !important; object-fit:contain; background:transparent }
 
 /* section heading inside results (not focusable, so it stays out of the D-pad order) */
 #main .sect { color:var(--dim); font-size:19px; letter-spacing:.08em; text-transform:uppercase; margin:14px 0 6px 4px }
@@ -75,6 +81,8 @@ button { font:inherit; color:inherit; background:var(--panel2); border:0; border
 /* rows that do something to the current song rather than open / play a list */
 #main .item.action { padding-left:22px }
 #now-love { color:var(--accent); font-size:30px }
+#now-modes { color:var(--dim); font-size:19px; white-space:nowrap }
+.item img.round { border-radius:50% }
 
 /* transient confirmation (love, add to library, station) — above the visualiser too */
 #toast { position:fixed; left:50%; bottom:9vh; transform:translateX(-50%); z-index:60; max-width:70vw; text-align:center;

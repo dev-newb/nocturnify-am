@@ -30,9 +30,7 @@
     <div class="item" data-nav="search">Search</div>
     <div class="item" data-nav="queue">Up Next</div>
     <div class="item" data-nav="viz">Visualizer</div>
-    <div class="item" data-nav="shuffle">Shuffle: Off</div>
-    <div class="item" data-nav="autoplay">Autoplay: On</div>
-    <div class="item" data-nav="gapless">Gapless: Off</div>
+    <div class="item" data-nav="playback">Playback</div>
     <div class="spacer"></div>
     <div class="item" data-nav="logout">Sign out</div>
   </nav>
@@ -41,13 +39,16 @@
     <img id="now-art" alt="">
     <div id="now-text"><div id="now-title">Nothing playing</div><div id="now-artist"></div></div>
     <div id="now-love"></div>
+    <div id="now-modes"></div>
     <div id="now-state">▶</div>
     <div id="now-status"></div>
     <div id="now-bar"><div id="now-fill"></div></div>
   </footer>
 </div>
 
-<div id="viz" hidden></div>
+<!-- MusicKit plays music videos into this container (its id is what MusicKit looks for);
+     viz.js layers its two canvases either side of it -->
+<div id="viz" hidden><div id="apple-music-video-container"></div></div>
 <div id="toast" hidden></div>
 
 <script src="config.js"></script>

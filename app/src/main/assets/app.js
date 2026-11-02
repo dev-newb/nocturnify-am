@@ -22,6 +22,7 @@
   let loved = null;       // rating of the current song: 1, -1, 0, or null (unknown)
   let idleTimer = null;
   let logoutArmed = false;
+  let addTarget = null;   // what "Add to a playlist" adds, fixed when the picker opens
 
   // ---------- Apple Music API ----------
   const API = 'https://api.music.apple.com';
@@ -56,6 +57,8 @@
     const id = String(it?.id ?? '');
     return /^\d+$/.test(id) ? id : null;
   };
+  const isVideo = it => /^music-?videos?$/i.test(it?.type || '');
+  const kindOf = it => (isVideo(it) ? 'music-videos' : 'songs');   // ratings and library adds are typed
 
   // ---------- Player (MusicKit) ----------
   const now = () => music?.nowPlayingItem || null;
@@ -85,6 +88,7 @@
   }
   async function stationFrom(it) {
     const id = catId(it);
+    if (isVideo(it)) { toast('Stations start from songs — pick a song'); return; }
     if (!id) { toast('No catalog version of this song to build a station from'); return; }
     try {
       await music.setStationQueue({ song: id });
@@ -101,7 +105,7 @@
     const alb = it.albumName || '';
     $('#now-artist').textContent = alb && alb.trim().toLowerCase() !== (it.title || '').trim().toLowerCase()
       ? `${it.artistName || ''}  ·  ${alb}` : (it.artistName || '');
-    $('#now-art').src = art(it.artwork, 160);
+    $('#now-art').src = art((videoSong.get(String(it.id)) || it).artwork, 160);   // a video keeps its song's cover
     $('#now-state').textContent = playing() ? '▶' : '❚❚';
     $('#now-love').textContent = loved === 1 ? '♥' : '';
   }
@@ -109,7 +113,33 @@
     if (!music) return;
     const d = music.currentPlaybackDuration;
     $('#now-fill').style.width = d ? (100 * music.currentPlaybackTime / d).toFixed(2) + '%' : '0';
+    if (sleepAt && Date.now() >= sleepAt) sleepNow(true);
+    if (sleepIdx) syncToggles();                       // minutes left
+    // A music video that runs to its natural end leaves MusicKit stuck — the next item becomes
+    // current but never starts, and play() refuses — while a skip a moment earlier works. So
+    // videos are skipped out of rather than run out (or restarted, on repeat one). MusicKit's
+    // own clock counts whole seconds, so this reads the video element's.
+    const it = now(), vEl = isVideo(it) && document.getElementById('apple-music-video-player');
+    if (vEl && !vEl.paused && vEl.duration - vEl.currentTime < 0.8 && Date.now() - endSkipAt > 3000) {
+      endSkipAt = Date.now();
+      const q = music.queue;
+      if (music.repeatMode === 1) music.seekToTime(0);
+      else if (q.position < q.items.length - 1 || music.repeatMode === 2) next();
+    }
+    // Safety net: a video that stalls anyway wedges MusicKit's video player until a song plays.
+    // Put its song back in front; Video mode then swaps that for the video the way that works.
+    if (isVideo(it) && music.playbackState === 0 && !swapping) {        // 0: MusicKit's "none"
+      if (!stallAt) stallAt = Date.now();
+      else if (Date.now() - stallAt > 3000) {
+        stallAt = 0;
+        const song = catId(videoSong.get(String(it.id)));
+        console.log('[video] stalled:', it.title);
+        if (song) Promise.resolve(music.playNext({ song })).then(() => music.skipToNextItem()).catch(() => next());
+        else next();
+      }
+    } else stallAt = 0;
   }, 500);
+  let endSkipAt = 0, stallAt = 0;
   let lastPush = '';
   function pushNative() {
     try {
@@ -124,7 +154,7 @@
     loved = null; renderNow();
     const id = catId(now());
     if (!id) return;
-    try { const r = await api(`/v1/me/ratings/songs/${id}`); loved = r?.data?.[0]?.attributes?.value ?? 0; }
+    try { const r = await api(`/v1/me/ratings/${kindOf(now())}/${id}`); loved = r?.data?.[0]?.attributes?.value ?? 0; }
     catch (e) { loved = e.status === 404 ? 0 : null; }
     if (catId(now()) === id) renderNow();
   }
@@ -133,8 +163,8 @@
     if (!id) { toast('Can’t rate this item'); return; }
     const want = loved !== 1;
     try {
-      if (want) await api(`/v1/me/ratings/songs/${id}`, { method: 'PUT', body: JSON.stringify({ type: 'rating', attributes: { value: 1 } }) });
-      else await api(`/v1/me/ratings/songs/${id}`, { method: 'DELETE' });
+      if (want) await api(`/v1/me/ratings/${kindOf(it)}/${id}`, { method: 'PUT', body: JSON.stringify({ type: 'rating', attributes: { value: 1 } }) });
+      else await api(`/v1/me/ratings/${kindOf(it)}/${id}`, { method: 'DELETE' });
       loved = want ? 1 : 0; renderNow();
       toast(want ? `♥ Loved “${it.title}”` : `Removed love from “${it.title}”`);
       VIZ.flash?.(want ? '♥' : '♡');
@@ -143,7 +173,7 @@
   async function addToLibrary() {
     const it = now(), id = catId(it);
     if (!id) { toast('Already in your library'); return; }
-    try { await api(`/v1/me/library?ids[songs]=${id}`, { method: 'POST' }); toast(`Added “${it.title}” to your library`); }
+    try { await api(`/v1/me/library?ids[${kindOf(it)}]=${id}`, { method: 'POST' }); toast(`Added “${it.title}” to your library`); }
     catch (e) { toast('Library: ' + e.message); }
   }
 
@@ -157,25 +187,34 @@
   const vizState = () => {
     const it = now(); if (!it) return {};
     const live = !!it.isLiveRadioStation;
+    const src = videoSong.get(String(it.id)) || it;    // a video standing in for a song keeps its cover and album
     return {
       uri: String(it.id), title: (live && liveMeta?.title) || it.title || '',
       artist: (live && liveMeta?.artist) || it.artistName || '',
-      album: live ? it.title : (it.albumName || ''),
+      album: live ? it.title : (src.albumName || ''),
       context: contextLabel(it),
-      artUrl: art(it.artwork, 600),
+      artUrl: art(src.artwork, 600),
       position: (music.currentPlaybackTime || 0) * 1000,
       duration: live ? 0 : (music.currentPlaybackDuration || 0) * 1000,
       paused: !playing(),
+      video: isVideo(it), videoNote,
     };
   };
 
+  const REPEAT = ['Off', 'One', 'All'];                 // MusicKit.PlayerRepeatMode: none / one / all
+  // Labels live on the Playback view's rows; the footer keeps a compact reminder of what's on.
   function syncToggles() {
-    const sh = document.querySelector('[data-nav="shuffle"]');
-    if (sh) sh.textContent = `Shuffle: ${music?.shuffleMode ? 'On' : 'Off'}`;
-    const ap = document.querySelector('[data-nav="autoplay"]');
-    if (ap) ap.textContent = `Autoplay: ${music?.autoplayEnabled ? 'On' : 'Off'}`;
-    const gl = document.querySelector('[data-nav="gapless"]');
-    if (gl) gl.textContent = `Gapless: ${gaplessPref() ? 'On' : 'Off'}`;
+    const set = (k, v) => document.querySelectorAll(`[data-toggle="${k}"]`).forEach(e => { if (e.textContent !== v) e.textContent = v; });
+    set('shuffle', `Shuffle: ${music?.shuffleMode ? 'On' : 'Off'}`);
+    set('repeat', `Repeat: ${REPEAT[music?.repeatMode] || 'Off'}`);
+    set('autoplay', `Autoplay: ${music?.autoplayEnabled ? 'On' : 'Off'}`);
+    set('gapless', `Gapless: ${gaplessPref() ? 'On' : 'Off'}`);
+    set('sleep', `Sleep timer: ${sleepLabel()}`);
+    set('intensity', `Visualizer intensity: ${VIZ.level()} of 5`);
+    const on = [music?.shuffleMode ? 'Shuffle' : '', music?.repeatMode ? `Repeat ${REPEAT[music.repeatMode].toLowerCase()}` : '',
+                sleepIdx ? `Sleep ${sleepShort()}` : ''].filter(Boolean).join(' · ');
+    const nm = $('#now-modes');
+    if (nm && nm.textContent !== on) nm.textContent = on;
   }
   // Gapless is MusicKit's "seamless audio transitions": the next song (and its DRM key) goes to
   // the decoder already running, so albums that run one track into the next have no gap. Off by
@@ -206,10 +245,47 @@
   function nudgeIntensity(d) {
     const n = VIZ.intensity(d);
     if (screen !== 'viz') toast(`Visualizer intensity ${n} of 5`);
+    syncToggles();
   }
   function toggleShuffle() {
     music.shuffleMode = music.shuffleMode ? 0 : 1;      // MusicKit.PlayerShuffleMode: off / songs
     syncToggles(); status('Shuffle ' + (music.shuffleMode ? 'on' : 'off'));
+  }
+  function cycleRepeat() {
+    try { music.repeatMode = { 0: 2, 2: 1, 1: 0 }[music.repeatMode] ?? 0; } catch (e) { toast('Repeat isn’t available for this queue'); }
+    try { localStorage.repeat = String(music.repeatMode); } catch (e) {}
+    syncToggles(); status('Repeat ' + REPEAT[music.repeatMode].toLowerCase());
+  }
+  // Sleep timer: OK steps Off → 15 → 30 → 45 → 60 → 90 min → end of this song → Off.
+  // "End of this song" pauses as the next item takes over (see nowPlayingItemDidChange).
+  const SLEEP = [0, 15, 30, 45, 60, 90, 'song'];
+  let sleepIdx = 0, sleepAt = 0, sleeping = false;
+  const sleepLeft = () => Math.max(1, Math.ceil((sleepAt - Date.now()) / 60000));
+  const sleepLabel = () => (!sleepIdx ? 'Off' : SLEEP[sleepIdx] === 'song' ? 'End of this song' : `${sleepLeft()} min left`);
+  const sleepShort = () => (SLEEP[sleepIdx] === 'song' ? 'after this song' : `${sleepLeft()} min`);
+  function cycleSleep() {
+    sleepIdx = (sleepIdx + 1) % SLEEP.length;
+    const v = SLEEP[sleepIdx];
+    sleepAt = typeof v === 'number' && v ? Date.now() + v * 60000 : 0;
+    syncToggles(); status('Sleep timer: ' + sleepLabel());
+  }
+  let holdUntil = 0;
+  async function sleepNow(fade) {
+    if (sleeping) return;
+    sleeping = true; sleepIdx = 0; sleepAt = 0; syncToggles();
+    const v0 = music.volume;
+    if (fade) for (let i = 1; i <= 16; i++) { music.volume = v0 * (1 - i / 16); await new Promise(r => setTimeout(r, 500)); }   // ~8 s
+    else {
+      // End of the song: the next one has just become current and starts by itself a moment
+      // after any pause — so keep it silent and keep pausing it until it settles.
+      music.volume = 0; holdUntil = Date.now() + 4000;
+      await new Promise(r => setTimeout(r, 4000));
+      holdUntil = 0;
+    }
+    await setPlaying(false);
+    music.volume = v0;
+    sleeping = false;
+    toast('Sleep timer — paused');
   }
   function toggleAutoplay() {
     music.autoplayEnabled = !music.autoplayEnabled;
@@ -217,12 +293,56 @@
     syncToggles(); status('Autoplay ' + (music.autoplayEnabled ? 'on — similar music continues after the queue' : 'off'));
   }
 
-  function openViz() { screen = 'viz'; VIZ.start({ state: vizState }); }
+  function openViz() { screen = 'viz'; VIZ.start({ state: vizState }); videoSoon(); }
   function resetIdle() {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => { if (screen === 'app' && playing()) openViz(); }, 60000);   // screensaver-style
   }
   function closeViz() { VIZ.stop(); screen = 'app'; resetIdle(); }
+
+  // ---------- Video: a visualiser option ----------
+  // With the visualiser on Video, a song that has a music video plays as that video instead,
+  // full screen behind the cover and track info (9 hides those). MusicKit plays one item at a
+  // time, so the video goes into the queue after the song and playback skips straight to it;
+  // its own audio is what you hear. The song is muted for that moment.
+  // Only insert-and-skip works: a video MusicKit reaches on its own — at the end of the item
+  // before, or after preloading it as the next item — never starts.
+  const videoOf = new Map();               // song catalog id -> music video id, or null
+  const videoSong = new Map();             // music video id -> the song it stands in for
+  let videoNote = '', swapping = false, videoTimer = null;
+  const videoMode = () => screen === 'viz' && VIZ.modeName() === 'Video';
+  async function videoFor(it) {
+    const id = catId(it);
+    if (!it || !id || isVideo(it) || it.isLiveRadioStation) return null;
+    if (videoOf.has(id)) return videoOf.get(id);
+    const r = await soft(`/v1/catalog/{sf}/songs/${id}?include=music-videos`);
+    if (!r) return null;                                // a failed lookup isn't remembered
+    const v = r.data?.[0]?.relationships?.['music-videos']?.data?.[0]?.id || null;
+    videoOf.set(id, v);
+    return v;
+  }
+  // The visualiser just went to Video (or opened on it): swap the song that's playing now.
+  // Debounced, so stepping through modes with ▲ ▼ doesn't swap anything on the way past.
+  function videoSoon() { clearTimeout(videoTimer); videoNote = ''; videoTimer = setTimeout(videoNow, 1200); }
+  async function videoNow() {
+    if (!music || !videoMode() || swapping) return;
+    const it = now();
+    if (!it || isVideo(it)) { videoNote = ''; return; }
+    if (playCtx.station || it.isLiveRadioStation) { videoNote = 'Stations can’t swap songs for videos'; return; }
+    swapping = true;                                    // one swap at a time: item changes and ▲ ▼ both call this
+    try {
+      if (!videoOf.has(catId(it))) videoNote = 'Looking for a music video…';
+      const v = await videoFor(it);
+      if (String(now()?.id) !== String(it.id) || !videoMode()) return;
+      if (!v) { videoNote = 'No music video for this song'; return; }
+      videoSong.set(String(v), it);
+      const vol = music.volume;
+      music.volume = 0;
+      try { await music.playNext({ musicVideo: v }); await music.skipToNextItem(); videoNote = ''; }
+      finally { music.volume = vol; }
+    } catch (e) { videoNote = 'Couldn’t switch to the video'; console.log('[video] swap failed:', e?.message || e, e?.stack || ''); }
+    finally { swapping = false; }
+  }
 
   // Seeking from the visualiser: presses accumulate and fire one seek once you stop.
   let seekTarget = null, seekTimer = null;
@@ -297,6 +417,7 @@
     else if (/playlists$/.test(x.type)) sub = a.curatorName || (x.type.startsWith('library') ? 'Your playlist' : 'Playlist');
     else if (x.type === 'stations') sub = a.isLive ? 'Live radio' : 'Station';
     else if (/songs$/.test(x.type)) sub = a.artistName || '';
+    else if (x.type === 'artists') { sub = (a.genreNames || []).filter(g => g !== 'Music')[0] || 'Artist'; img.classList.add('round'); }
     row.append(el('div', '', `<div class="t">${esc(a.name)}</div><div class="s">${esc(sub)}</div>`));
     row.onactivate = () => openRes(x);
     return row;
@@ -308,6 +429,18 @@
     else if (/playlists$/.test(x.type)) { ctxName = a.name; go({ name: 'playlist', id: x.id, lib, title: a.name, note: strip(a.description?.short || a.description?.standard) }); }
     else if (x.type === 'stations') { playQueue({ station: x.id }, a.name, { station: true }); status('Playing ' + a.name); }
     else if (/songs$/.test(x.type)) playQueue({ song: x.id }, a.name);
+    else if (x.type === 'artists') go({ name: 'artist', id: x.id, title: a.name });
+  }
+  // From whatever is playing to its artist's page.
+  async function openArtistOf(it) {
+    if (!it) return;
+    try {
+      const id = catId(it);
+      const rel = id ? (await soft(`/v1/catalog/{sf}/${kindOf(it)}/${id}?include=artists`))?.data?.[0]?.relationships?.artists?.data?.[0] : null;
+      const hit = rel || (await api(`/v1/catalog/{sf}/search?term=${encodeURIComponent(it.artistName || '')}&types=artists&limit=1`))?.results?.artists?.data?.[0];
+      if (!hit) { toast('Couldn’t find that artist'); return; }
+      go({ name: 'artist', id: hit.id, title: hit.attributes?.name || it.artistName });
+    } catch (e) { toast('Artist: ' + e.message); }
   }
   // Fetch an endpoint, tolerating failure: For You / Radio stitch several together and one
   // missing section shouldn't blank the page.
@@ -406,10 +539,13 @@
       if (recent?.data?.length) { sect(list, 'Recently played'); recent.data.forEach(x => list.append(resRow(x))); }
       setMain('Radio', list);
     },
-    async charts() {
-      ctxName = 'Charts';
+    async charts({ genre, title } = {}) {
+      ctxName = title || 'Charts';
       const list = el('div', 'list');
-      const r = await api('/v1/catalog/{sf}/charts?types=songs,albums,playlists&limit=20');
+      const [r, genres] = await Promise.all([
+        api(`/v1/catalog/{sf}/charts?types=songs,albums,playlists&limit=20${genre ? '&genre=' + genre : ''}`),
+        genre ? null : soft('/v1/catalog/{sf}/genres'),
+      ]);
       const songs = r?.results?.songs?.[0], albums = r?.results?.albums?.[0], pls = r?.results?.playlists?.[0];
       if (songs?.data?.length) {
         sect(list, songs.name || 'Top songs');
@@ -418,7 +554,74 @@
       }
       if (albums?.data?.length) { sect(list, albums.name || 'Top albums'); albums.data.forEach(x => list.append(resRow(x))); }
       if (pls?.data?.length) { sect(list, pls.name || 'Top playlists'); pls.data.forEach(x => list.append(resRow(x))); }
-      setMain('Charts', list); markPlaying();
+      const gs = (genres?.data || []).filter(g => g.id !== '34');      // 34 is "Music", the root
+      if (gs.length) {
+        sect(list, 'Charts by genre');
+        gs.forEach(g => {
+          const row = el('div', 'item', `<div><div class="t">${esc(g.attributes.name)}</div></div>`);
+          row.onactivate = () => go({ name: 'charts', genre: g.id, title: `Charts · ${g.attributes.name}` });
+          list.append(row);
+        });
+      }
+      if (!list.children.length) list.append(el('div', 'empty', 'No charts for this genre'));
+      setMain(title || 'Charts', list); markPlaying();
+    },
+    async artist({ id, title }) {
+      const list = el('div', 'list');
+      const x = (await api(`/v1/catalog/{sf}/artists/${id}?views=top-songs,latest-release,full-albums,singles,similar-artists&include=station`))?.data?.[0];
+      const a = x?.attributes || {}, V = x?.views || {}, name = a.name || title;
+      ctxName = name;
+      const station = x?.relationships?.station?.data?.[0];
+      if (station) {
+        const row = el('div', 'item action', `<div><div class="t">◎ ${esc(name)} Radio</div><div class="s">Endless music from ${esc(name)} and artists like them</div></div>`);
+        row.onactivate = () => playQueue({ station: station.id }, `${name} Radio`, { station: true });
+        list.append(row);
+      }
+      const top = (V['top-songs']?.data || []).filter(t => t.attributes?.playParams);
+      if (top.length) {
+        sect(list, 'Top songs');
+        const ids = top.map(t => t.id);
+        top.forEach((t, i) => list.append(songRow(t, i, () => playQueue({ songs: ids, startWith: i }, `${name} · Top songs`))));
+      }
+      for (const [k, label] of [['latest-release', 'Latest release'], ['full-albums', 'Albums'], ['singles', 'Singles & EPs'], ['similar-artists', 'Similar artists']]) {
+        const d = V[k]?.data || [];
+        if (d.length) { sect(list, label); d.forEach(r => list.append(resRow(r))); }
+      }
+      if (!list.children.length) list.append(el('div', 'empty', 'Nothing to show for this artist'));
+      setMain(name, list, (a.genreNames || []).filter(g => g !== 'Music').join(' · ')); markPlaying();
+    },
+    async addto() {
+      const t = addTarget, list = el('div', 'list');
+      const r = t ? await api('/v1/me/library/playlists?limit=100') : null;
+      const mine = (r?.data || []).filter(p => p.attributes?.canEdit);
+      mine.forEach(p => {
+        const row = resRow(p);
+        row.onactivate = async () => {
+          try {
+            await api(`/v1/me/library/playlists/${p.id}/tracks`, { method: 'POST', body: JSON.stringify({ data: [{ id: t.id, type: t.type }] }) });
+            toast(`Added “${t.title}” to ${p.attributes.name}`);
+            onTvBack();                                  // back to where the choice was made
+          } catch (e) { toast('Playlist: ' + e.message); }
+        };
+        list.append(row);
+      });
+      if (!list.children.length) list.append(el('div', 'empty', t ? 'None of your playlists can be edited' : 'Nothing to add'));
+      setMain(t ? `Add “${t.title}” to…` : 'Add to a playlist', list);
+    },
+    async playback() {
+      const list = el('div', 'list');
+      const row = (key, sub, fn) => {
+        const r = el('div', 'item action', `<div><div class="t" data-toggle="${key}"></div>${sub ? `<div class="s">${esc(sub)}</div>` : ''}</div>`);
+        r.onactivate = fn; list.append(r);
+      };
+      row('shuffle', '', toggleShuffle);
+      row('repeat', 'Off → All (loop the queue) → One (loop this song)', cycleRepeat);
+      row('autoplay', 'When the queue ends, keep going with similar music', toggleAutoplay);
+      row('gapless', 'Songs run straight into each other. Off avoids a crackle bug on this TV, with a short gap', toggleGapless);
+      row('sleep', '', cycleSleep);
+      row('intensity', 'How hard the music pushes the visualizer (remote 1 / 3 too)', () => nudgeIntensity(VIZ.level() >= 5 ? -4 : 1));
+      setMain('Playback', list, 'Visualizer: ▲ ▼ mode (Video plays music videos) · 1 / 3 intensity · 9 hides the cover and track info');
+      syncToggles();
     },
     async queue() {
       const list = el('div', 'list');
@@ -426,9 +629,15 @@
       if (it) {
         const act = (t, s, fn) => { const row = el('div', 'item action', `<div><div class="t">${t}</div><div class="s">${s}</div></div>`); row.onactivate = fn; list.append(row); };
         sect(list, 'Now playing');
-        act(loved === 1 ? '♥ Loved — press to undo' : '♡ Love this song', esc(`${it.title} · ${it.artistName || ''}`), async () => { await toggleLove(); go({ name: 'queue' }); });
+        act(loved === 1 ? '♥ Loved — press to undo' : '♡ Love this song', esc(`${it.title} · ${it.artistName || ''}`), async () => { await toggleLove(); go({ name: 'queue' }, { idx: 0 }); });
         act('＋ Add to library', 'Keep it in your Apple Music library', addToLibrary);
         act('◎ Start a station from this song', 'Endless music like it', () => stationFrom(it));
+        act(`◉ More by ${esc(it.artistName || 'this artist')}`, 'Top songs, albums and similar artists', () => openArtistOf(it));
+        act('＋ Add to a playlist…', 'One of your playlists', () => {
+          const id = catId(it);
+          addTarget = { id: id || String(it.id), type: isVideo(it) ? 'music-videos' : id ? 'songs' : 'library-songs', title: it.title };
+          go({ name: 'addto' });
+        });
       }
       const items = music?.queue?.items || [];
       const pos = music?.queue?.position ?? -1;
@@ -453,8 +662,19 @@
       const input = el('input'); input.placeholder = 'Search Apple Music…'; input.className = 'item';
       const results = el('div', 'list');
       input.onactivate = () => input.focus();          // OK enters the field; IME opens
+      const sug = { q: '', terms: [] };                // Apple's completions for what's typed so far
+      let sugTimer = null;
       const render = () => {
         results.innerHTML = '';
+        const q = input.value.trim();
+        if (sug.terms.length && sug.q === q && lastSearch?.q !== q) {
+          sect(results, 'Suggestions');
+          sug.terms.forEach(term => {
+            const row = el('div', 'item', `<div><div class="t">${esc(term)}</div></div>`);
+            row.onactivate = () => { input.value = term; run(); };
+            results.append(row);
+          });
+        }
         for (const s of lastSearch?.sections || []) {
           sect(results, s.label);
           if (s.songs) {
@@ -465,13 +685,25 @@
         if (!results.children.length) results.append(el('div', 'empty', lastSearch ? 'No results' : 'Press OK to type a search'));
         markPlaying();
       };
+      input.addEventListener('input', () => {
+        clearTimeout(sugTimer);
+        const q = input.value.trim();
+        if (q.length < 2) { sug.terms = []; render(); return; }
+        sugTimer = setTimeout(async () => {
+          const r = await soft(`/v1/catalog/{sf}/search/suggestions?term=${encodeURIComponent(q)}&kinds=terms&limit=6`);
+          if (input.value.trim() !== q) return;          // typing moved on
+          sug.q = q; sug.terms = (r?.results?.suggestions || []).map(x => x.displayTerm || x.searchTerm).filter(Boolean);
+          render();
+        }, 250);
+      });
       const run = async () => {
         const q = input.value.trim(); if (!q) return;
+        clearTimeout(sugTimer); sug.terms = [];
         results.innerHTML = '<div class="empty">Searching…</div>';
         try {
           const term = encodeURIComponent(q);
           const [cat, lib] = await Promise.all([
-            api(`/v1/catalog/{sf}/search?term=${term}&types=songs,albums,playlists,stations&limit=10`),
+            api(`/v1/catalog/{sf}/search?term=${term}&types=songs,albums,playlists,stations,artists&limit=10`),
             soft(`/v1/me/library/search?term=${term}&types=library-playlists,library-albums&limit=5`),
           ]);
           const R = cat?.results || {}, L = lib?.results || {};
@@ -480,6 +712,7 @@
             q,
             sections: [
               mine.length && { label: 'In your library', items: mine },
+              R.artists?.data?.length && { label: 'Artists', items: R.artists.data.slice(0, 3) },
               R.songs?.data?.length && { label: 'Songs', items: R.songs.data, songs: true },
               R.albums?.data?.length && { label: 'Albums', items: R.albums.data },
               R.playlists?.data?.length && { label: 'Playlists', items: R.playlists.data },
@@ -515,15 +748,20 @@
     },
   };
 
-  async function go(v) {
+  // Back retraces the path — search → artist → album → Back → artist → Back → search — and
+  // the sidebar starts a new path.
+  const backStack = [];
+  async function go(v, { back = false, idx = null } = {}) {
     if (v.name === 'viz') { openViz(); return; }     // overlay: leave the current view intact underneath
-    if (v.name === 'shuffle') { toggleShuffle(); return; }   // toggles, not destinations
-    if (v.name === 'autoplay') { toggleAutoplay(); return; }
-    if (v.name === 'gapless') { toggleGapless(); return; }
     if (v.name === 'logout') { views.logout(); return; }
-    view = v; if (!views[v.name]) return;
+    if (!views[v.name]) return;
+    const same = view.name === v.name && view.id === v.id && view.genre === v.genre;
+    if (v.top) backStack.length = 0;
+    else if (!back && !same) backStack.push({ v: view, idx: focus.idx.main });
+    view = v;
     main.innerHTML = '<div class="title">Loading…</div>';
     try { await views[v.name](v); } catch (e) { main.innerHTML = `<div class="title">Error</div><div class="empty">${esc(e.message)}</div>`; status(e.message); }
+    if (idx != null && view === v) focus.enter('main', Math.min(idx, focus.items('main').length - 1));
   }
 
   // ---------- Focus / D-pad ----------
@@ -551,7 +789,7 @@
     const a = document.activeElement;
     const t = focus.current() || ((a && (a.dataset?.nav || a.onactivate)) ? a : null);
     if (!t) return;
-    if (t.dataset?.nav) go({ name: t.dataset.nav }); else t.onactivate?.();
+    if (t.dataset?.nav) go({ name: t.dataset.nav, top: true }); else t.onactivate?.();
   }
 
   const isOk = e => e.key === 'Enter' || e.key === 'Spacebar' || e.keyCode === 13 || e.keyCode === 23;
@@ -562,10 +800,11 @@
       if (isOk(e) || k === 'MediaPlayPause') togglePlay();
       else if (k === 'ArrowRight' || k === 'MediaTrackNext') next();
       else if (k === 'ArrowLeft' || k === 'MediaTrackPrevious') prev();
-      else if (k === 'ArrowUp') VIZ.cycle(1);        // D-pad up/down: the one control every
-      else if (k === 'ArrowDown') VIZ.cycle(-1);     // Android TV remote has and we don't use
-      else if (k === '1') VIZ.intensity(-1);
-      else if (k === '3') VIZ.intensity(1);
+      else if (k === 'ArrowUp') { VIZ.cycle(1); videoSoon(); }     // D-pad up/down: the one control every
+      else if (k === 'ArrowDown') { VIZ.cycle(-1); videoSoon(); }  // Android TV remote has and we don't use
+      else if (k === '1') { VIZ.intensity(-1); syncToggles(); }
+      else if (k === '3') { VIZ.intensity(1); syncToggles(); }
+      else if (k === '9') VIZ.toggleBare();          // full-screen visuals / video
       else return;
       e.preventDefault(); return;
     }
@@ -593,13 +832,14 @@
        183: toggleLove,                                  // red:    ♥ love / unlove
        184: addToLibrary,                                // green:  add to library
        185: () => now() && stationFrom(now()),           // yellow: station from this song
-       186: () => VIZ.cycle(1),                          // blue:   next visualiser mode
+       186: () => { VIZ.cycle(1); videoSoon(); },        // blue:   next visualiser mode
     })[code]?.();
   };
   window.onTvBack = () => {
     if (screen === 'viz') { closeViz(); return true; }
     if (document.activeElement?.tagName === 'INPUT') { document.activeElement.blur(); return true; }
-    if (view.name !== 'home') { go({ name: 'home' }); return true; }
+    if (backStack.length) { const b = backStack.pop(); go(b.v, { back: true, idx: b.idx }); return true; }
+    if (view.name !== 'home') { go({ name: 'home', top: true }); return true; }
     if (focus.zone === 'main') { focus.enter('side'); return true; }
     return false;                                               // at the root: let Android close the app
   };
@@ -646,10 +886,11 @@
     fitSide();
     storefront = music.storefrontId || 'us';
     try { music.autoplayEnabled = localStorage.autoplay !== '0'; } catch (e) { music.autoplayEnabled = true; }
+    try { music.repeatMode = +localStorage.repeat || 0; } catch (e) {}
     syncToggles();
     status(`Ready · Apple Music (${storefront.toUpperCase()})`);
     resetIdle();
-    go({ name: 'home' });
+    go({ name: 'home', top: true });
   }
 
   document.addEventListener('musickitloaded', async () => {
@@ -664,8 +905,19 @@
       });
     } catch (e) { return showSetup('MusicKit wouldn’t start: ' + (e?.message || e)); }
     window.music = music;   // handy from the remote debugger
-    music.addEventListener('nowPlayingItemDidChange', () => { liveMeta = null; renderNow(); markPlaying(); pushNative(); refreshLove(); });
-    music.addEventListener('playbackStateDidChange', () => { renderNow(); pushNative(); });
+    music.addEventListener('nowPlayingItemDidChange', () => {
+      liveMeta = null; renderNow(); markPlaying(); pushNative(); refreshLove();
+      if (SLEEP[sleepIdx] === 'song' && !swapping) sleepNow(false);
+      if (videoMode()) {
+        videoNow();
+        const nx = music.queue?.items?.[(music.queue?.position ?? -1) + 1];
+        if (nx) videoFor(nx);                           // look it up now, so that swap is quick
+      }
+    });
+    music.addEventListener('playbackStateDidChange', () => {
+      if (Date.now() < holdUntil && playing()) music.pause();   // sleep timer: hold the next song
+      renderNow(); pushNative();
+    });
     music.addEventListener('mediaPlaybackError', e => { const m = e?.message || e?.reason || String(e); status('playback: ' + m); console.log('[mk] playback error', JSON.stringify(e)); });
     music.addEventListener('timedMetadataDidChange', e => {
       // Live radio songs arrive as ID3 / HLS metadata; log the shape until it's pinned down.

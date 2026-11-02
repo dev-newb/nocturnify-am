@@ -18,6 +18,7 @@
   const KAL = 9, MUR = 10, GOL = 11, HAR = 12, HALO = 13, SCOPE = 14;
   const AUDIO_ONLY = new Set([HALO, SCOPE]);   // nothing to show without a signal; Auto skips them then
   const AUTO = MODES.length;            // hidden slot: sits between the last and first
+  const VIDEO = AUTO + 1;               // the song's music video instead (app.js swaps it in); Auto runs behind
   // per-mode trail persistence. Harmonograph is 1: its persistence lives in its own paper
   // canvas, and a trail on top would multiply the ink's brightness by 1/trail.
   const TRAIL = [0.135, 0.135, 0.09, 0.055, 0.13, 0.10, 0.22, 0.10, 0.20, 0.30, 0.26, 0.16, 1.0, 0.30, 0.22];
@@ -25,6 +26,8 @@
   const ART_CY = H * 0.355, ART_SZ = 268;
 
   let cv, ctx, raf = 0, opts = null, running = false;
+  let cvO, ctxM, ctxO, videoShown = false;   // overlay canvas: cover + info over a music video
+  let bare = false, tipText = '', tipAt = -1e9;   // bare (remote 9): no cover, info or progress line
   let poolA = [], poolB = [], sprites = [], curtains = [], rings = [], sharps = [], lits = [], glow = null, pal = null, prevPal = null, palMix = 1;
   let autoIdx = 0, autoT = 0, autoNextReady = -1;
   // accents from a near-black cover are almost invisible as thin strokes; lift them a little
@@ -63,6 +66,7 @@
   const GAIN = [0, 0.35, 0.65, 1, 1.4, 1.85], ONSET = [0, 1.3, 1.12, 1, 0.88, 0.76];
   let level = 3, levelAt = -1e9;
   try { level = Math.min(5, Math.max(1, parseInt(localStorage.viz_intensity, 10) || 3)); } catch (e) {}
+  try { bare = localStorage.viz_bare === '1'; } catch (e) {}
 
   function onAudio(line) {
     if (typeof line !== 'string') return;
@@ -135,7 +139,7 @@
 
   try {
     const v = localStorage.viz_mode || '';
-    const byName = v === 'Auto' ? AUTO : MODES.indexOf(v);
+    const byName = v === 'Auto' ? AUTO : v === 'Video' ? VIDEO : MODES.indexOf(v);
     const legacy = parseInt(v, 10);          // older builds stored an index, and Auto was 9
     mode = !v ? AUTO : byName >= 0 ? byName : (legacy === 9 ? AUTO : (legacy >= 0 && legacy < 9 ? legacy : 0));
   } catch (e) {}
@@ -1044,7 +1048,7 @@
     // Auto holds a mode, then cross-fades into the next by drawing both with complementary
     // weights — no offscreen buffers; every mode scales its own alphas by w.
     let curMode = mode, nxtMode = -1, mixW = 0;
-    if (mode === AUTO) {
+    if (mode === AUTO || mode === VIDEO) {
       autoT += dt * moving;
       if (autoT >= HOLD + FADE) {
         autoT -= HOLD + FADE;
@@ -1061,17 +1065,44 @@
     }
     const trail = nxtMode >= 0 ? lerp(TRAIL[curMode], TRAIL[nxtMode], mixW) : TRAIL[curMode];
 
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = `rgba(${bg[0] | 0},${bg[1] | 0},${bg[2] | 0},${trail})`;
-    ctx.fillRect(0, 0, W, H);
+    // Video: the music video sits over this canvas, fitted to the screen and never stretched,
+    // with the visuals still running in any bars beside or above it. Cover, info and the rest
+    // move to the overlay canvas in front of the video.
+    const showVideo = mode === VIDEO && !!st.video;
+    if (showVideo !== videoShown) {
+      videoShown = showVideo;
+      cvO.style.visibility = showVideo ? 'visible' : 'hidden';
+      const vc = document.getElementById('apple-music-video-container');
+      if (vc) vc.style.visibility = showVideo ? 'visible' : 'hidden';
+    }
+    const vEl = showVideo && document.getElementById('apple-music-video-player');
+    const covered = vEl && vEl.videoWidth > 0 && Math.abs(vEl.videoWidth / vEl.videoHeight - W / H) < 0.02;
+    ctx = ctxM;
+    if (!covered) {                                    // a 16:9 video hides every pixel of this
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(${bg[0] | 0},${bg[1] | 0},${bg[2] | 0},${trail})`;
+      ctx.fillRect(0, 0, W, H);
 
-    const k = 0.75 + prog * 0.8;
-    renderMode(curMode, poolA, nxtMode >= 0 ? 1 - mixW : 1, dt, moving, k);
-    if (nxtMode >= 0) renderMode(nxtMode, poolB, mixW, dt, moving, k);
+      const k = 0.75 + prog * 0.8;
+      renderMode(curMode, poolA, nxtMode >= 0 ? 1 - mixW : 1, dt, moving, k);
+      if (nxtMode >= 0) renderMode(nxtMode, poolB, mixW, dt, moving, k);
+    }
 
+    if (showVideo) {
+      ctx = ctxO;
+      ctx.clearRect(0, 0, W, H);
+      if (!bare) {                                     // keep the text readable over bright video
+        scrimText(1); ctx.globalAlpha = 1;
+        const g = ctx.createLinearGradient(0, H - 150, 0, H);
+        g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,0.55)');
+        ctx.fillStyle = g; ctx.fillRect(0, H - 150, W, 150);
+      }
+    }
     ctx.globalCompositeOperation = 'source-over';
-    drawArt(W / 2, ART_CY, ART_SZ * (1 + Math.sin(tNow * 0.55) * 0.013));   // the cover stays still: no beat pulse
-    drawInfo(st);
+    if (!bare) {
+      drawArt(W / 2, ART_CY, ART_SZ * (1 + Math.sin(tNow * 0.55) * 0.013));   // the cover stays still: no beat pulse
+      drawInfo(st);
+    }
 
     // progress line + position marker; shows the seek target while scrubbing
     const barX = W * 0.18, barW = W * 0.64, barY = H - 42;
@@ -1082,6 +1113,7 @@
     const shown = seeking ? seekShown : st.position;
     const shownProg = st.duration ? Math.max(0, Math.min(1, shown / st.duration)) : 0;
     const a1 = pal.acc[0] || [255, 255, 255];
+    if (!bare || seeking) {                            // bare still shows where a seek is going
     ctx.fillStyle = 'rgba(255,255,255,0.14)';
     ctx.fillRect(barX, barY, barW, 3);
     ctx.fillStyle = rgb(a1);
@@ -1098,7 +1130,8 @@
     ctx.textAlign = 'right';
     ctx.fillStyle = 'rgba(255,255,255,0.50)';
     ctx.fillText(mmss(st.duration), barX + barW, barY - 16);
-    if (st.paused && !seeking) {
+    }
+    if (st.paused && !seeking && !bare) {
       ctx.textAlign = 'center';
       ctx.fillStyle = 'rgba(255,255,255,0.55)';
       ctx.font = '20px system-ui, sans-serif';
@@ -1113,17 +1146,30 @@
       ctx.fillText(flashTxt, W / 2, ART_CY + 34 - (1 - f) * 30);
       ctx.globalAlpha = 1;
     }
-    const audioMode = mode === AUTO ? -1 : mode;
+    const audioMode = mode >= AUTO ? -1 : mode;
+    let note = '';                                     // one quiet line, top left
     if ((AUDIO_ONLY.has(audioMode) && A.mix < 0.3) || (A.state === 'denied' && hintT > 0)) {
       if (hintT > 0) hintT -= dt;
+      note = A.state === 'denied' ? 'Audio access declined — the visualiser can’t hear the music'
+        : A.state === 'unavailable' ? 'Audio tap unavailable on this TV' : (st.paused ? 'Paused' : 'Listening…');
+    } else if (mode === VIDEO && !showVideo && st.videoNote) note = st.videoNote;
+    else if (bare && st.paused && !seeking) note = 'Paused';
+    if (note) {
       ctx.textAlign = 'left'; ctx.font = '20px system-ui, sans-serif';
       ctx.fillStyle = 'rgba(255,255,255,0.55)';
-      ctx.fillText(A.state === 'denied' ? 'Audio access declined — the visualiser can’t hear the music'
-        : A.state === 'unavailable' ? 'Audio tap unavailable on this TV' : (st.paused ? 'Paused' : 'Listening…'), 112, 74);
+      ctx.fillText(note, 112, 74);
     }
-    // intensity, briefly, after a 1 / 3 press — in the mode name's place
+    // top right, briefly: what the last 9 / 1 / 3 / mode press did
+    const tipA = Math.min(1, 2 - (ts - tipAt) / 1000);
     const lvA = Math.min(1, 2 - (ts - levelAt) / 1000);
-    if (lvA > 0) {
+    if (tipA > 0) {
+      ctx.globalAlpha = tipA;
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.font = '600 24px system-ui, sans-serif';
+      ctx.fillText(tipText, W - 112, 74);
+      ctx.globalAlpha = 1;
+    } else if (lvA > 0) {
       ctx.globalAlpha = lvA;
       const dx = 24, x1 = W - 119, x0 = x1 - dx * 4, y = 66;
       for (let i = 0; i < 5; i++) {
@@ -1141,9 +1187,11 @@
       ctx.textAlign = 'right';
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
       ctx.font = '600 24px system-ui, sans-serif';
-      ctx.fillText(mode === AUTO ? `Auto · ${MODES[autoIdx]}` : MODES[mode], W - 112, 74);
+      ctx.fillText(mode === AUTO ? `Auto · ${MODES[autoIdx]}`
+        : mode === VIDEO ? (showVideo ? 'Video' : `Video · ${MODES[autoIdx]}`) : MODES[mode], W - 112, 74);
       ctx.globalAlpha = 1;
     }
+    ctx = ctxM;
   }
 
   window.VIZ = {
@@ -1151,14 +1199,18 @@
       opts = o;
       const host = document.getElementById('viz');
       if (!cv) {
-        cv = document.createElement('canvas');
-        cv.width = W; cv.height = H;
-        host.appendChild(cv);
-        ctx = cv.getContext('2d', { alpha: false });
+        // back to front: visuals, the music video container (in index.html), cover + info
+        cv = document.createElement('canvas'); cv.className = 'viz-main';
+        cvO = document.createElement('canvas'); cvO.className = 'viz-over';
+        cv.width = cvO.width = W; cv.height = cvO.height = H;
+        cvO.style.visibility = 'hidden';
+        host.append(cv, cvO);
+        ctxM = cv.getContext('2d', { alpha: false }); ctxO = cvO.getContext('2d');
         poolA = mkPool(NPART); poolB = mkPool(NPART);
       }
+      ctx = ctxM;
       seed = hash(lastTrack || 'x') || 1;
-      initFor(mode === AUTO ? autoIdx : mode, poolA);
+      initFor(mode >= AUTO ? autoIdx : mode, poolA);
       ctx.fillStyle = '#07070b'; ctx.fillRect(0, 0, W, H);
       host.hidden = false;
       running = true; tPrev = 0;
@@ -1177,19 +1229,27 @@
       if (host) host.hidden = true;
     },
     cycle(d) {
-      mode = (mode + d + AUTO + 1) % (AUTO + 1);   // AUTO sits past the last real mode
-      try { localStorage.viz_mode = mode === AUTO ? 'Auto' : MODES[mode]; } catch (e) {}
-      modeUntil = tNow + 2; levelAt = -1e9;
-      if (mode === AUTO) { autoT = 0; autoIdx = 0; autoNextReady = -1; }
-      initFor(mode === AUTO ? autoIdx : mode, poolA);
+      mode = (mode + d + VIDEO + 1) % (VIDEO + 1);   // Auto, then Video, sit past the last real mode
+      try { localStorage.viz_mode = this.modeName(); } catch (e) {}
+      modeUntil = tNow + 2; levelAt = -1e9; tipAt = -1e9;
+      if (mode >= AUTO) { autoT = 0; autoIdx = 0; autoNextReady = -1; }
+      initFor(mode >= AUTO ? autoIdx : mode, poolA);
       console.log('[viz] mode:', this.modeName());
       return this.modeName();
     },
-    modeName: () => (mode === AUTO ? 'Auto' : MODES[mode]),
+    modeName: () => (mode === AUTO ? 'Auto' : mode === VIDEO ? 'Video' : MODES[mode]),
+    level: () => level,
+    toggleBare() {
+      bare = !bare;
+      try { localStorage.viz_bare = bare ? '1' : '0'; } catch (e) {}
+      tipText = bare ? 'Cover & info hidden · 9 brings them back' : 'Cover & info shown';
+      tipAt = performance.now(); modeUntil = 0; levelAt = -1e9;
+      return bare;
+    },
     intensity(d = 0) {
       level = Math.min(5, Math.max(1, level + d));
       try { localStorage.viz_intensity = String(level); } catch (e) {}
-      levelAt = performance.now(); modeUntil = 0;
+      levelAt = performance.now(); modeUntil = 0; tipAt = -1e9;
       console.log('[viz] intensity:', level);
       return level;
     },

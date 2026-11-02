@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Message
 import android.util.Log
@@ -87,6 +88,10 @@ class MainActivity : Activity() {
                     Log.d(TAG, "${m.message()}  (${m.sourceId().substringAfterLast('/')}:${m.lineNumber()})")
                     return true
                 }
+                // WebView paints a big grey play-button image over any video with no frame to show
+                // (loading, or paused before the first frame). A transparent pixel instead: the
+                // visualiser behind shows through.
+                override fun getDefaultVideoPoster(): Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
                 override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
                     openPopup(resultMsg)
                     return true
