@@ -18,15 +18,18 @@ Apple Music subscribers), browsing is the Apple Music API.
 - **Charts**, **Search** (catalog + your library), **Up Next** (jump anywhere in the queue; love,
   add to library, start a station)
 - Shuffle that works on any queue; **Autoplay** keeps similar music going when the queue ends
+- **Gapless** (off by default) for albums that run one track into the next — see Notes
 - Album and playlist blurbs from Apple's editorial notes
 - Remote: colour buttons, where the remote has them — red ♥ love, green add to library,
-  yellow station from this song, blue next visualiser mode
+  yellow station from this song, blue next visualiser mode; number keys 1 / 3 turn the
+  visualiser's intensity down / up
 - Background audio with a MediaSession, so the TV's media keys and notification work
 
 ## The visualiser
 
 15 modes plus **Auto**, which cross-fades through all of them (the default). ▲ ▼ change mode,
-◀ ▶ change track, OK plays/pauses. It opens on its own after a minute of idle playback.
+◀ ▶ change track, OK plays/pauses, 1 / 3 set the intensity (1–5, default 3: how hard the music
+pushes the picture). It opens on its own after a minute of idle playback.
 
 It's audio-reactive from the real signal. Web Audio can't hear MusicKit — Widevine-protected media
 reaches page script as silence — so the native shell reads the TV's output mix with Android's
@@ -70,4 +73,10 @@ The token expires after six months; the app says so on screen. Re-run step 3 and
   WebView for it (`onCreateWindow`) and closes it on `window.close()`.
 - The UA is desktop Chrome: MusicKit treats Android specially (native controls, no video) and the
   desktop path is the one that works here.
+- Gapless is MusicKit's *seamless audio transitions*: the next song, and its DRM key, are fed
+  to the decoder that's already playing. On the Bravia that switch sometimes leaves Android's AAC
+  decoder reading garbage (`AAC decoder returned error 0x4004, substituting silence` in logcat,
+  ~12 a second) until something restarts it — dropouts and crackle through whole tracks. So it's
+  off by default and every song gets a fresh decoder, with a short gap between tracks. The sidebar
+  toggle applies immediately and is remembered.
 - Debug builds enable WebView remote debugging (reachable only over adb).

@@ -57,6 +57,12 @@
               wave: new Float32Array(NW), lv: 0, lvAvg: 0.5, en: 0.5, flux: 0, fluxDev: 1, lastBeat: 0, env: 0, beats: 0 };
   const amp = (v, depth) => 1 + (v - 0.5) * depth;    // 0.5 (no signal) -> exactly 1
   const clamp01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
+  // Intensity 1–5 (remote 1 / 3): how hard the signal pushes the picture. 3 is what every mode
+  // was tuned at; the others scale the swings and the beat around the same calm centre, and
+  // shift onset sensitivity so 5 also lands more beats. Features still stay 0..1.
+  const GAIN = [0, 0.35, 0.65, 1, 1.4, 1.85], ONSET = [0, 1.3, 1.12, 1, 0.88, 0.76];
+  let level = 3, levelAt = -1e9;
+  try { level = Math.min(5, Math.max(1, parseInt(localStorage.viz_intensity, 10) || 3)); } catch (e) {}
 
   function onAudio(line) {
     if (typeof line !== 'string') return;
@@ -99,10 +105,10 @@
       // onset: flux well above its own running mean + deviation, at most ~4 a second
       const above = flux - R.flux;
       R.flux += above * 0.06; R.fluxDev += (Math.abs(above) - R.fluxDev) * 0.06;
-      if (live && above > R.fluxDev * 1.8 + 3.5 && now - R.lastBeat > 280) { R.env = 1; R.lastBeat = now; R.beats++; }
+      if (live && above > (R.fluxDev * 1.8 + 3.5) * ONSET[level] && now - R.lastBeat > 280) { R.env = 1; R.lastBeat = now; R.beats++; }
       // loudness: rms (mB) to 0..1 over -45..-5 dB
       R.lv = clamp01((R.rms / 100 + 45) / 40);
-      for (let i = 0; i < NW; i++) A.wave[i] = R.wave[i] * A.mix;
+      for (let i = 0; i < NW; i++) A.wave[i] = Math.max(-1, Math.min(1, R.wave[i] * A.mix * GAIN[level]));
     }
     // energy is loudness against the song's own recent average (~8s), not an absolute level:
     // mastered music sits near full scale throughout, so absolute loudness barely moves.
@@ -110,18 +116,18 @@
     if (live) R.lvAvg += (R.lv - R.lvAvg) * ease(8);
     R.en += (clamp01(0.5 + (R.lv - R.lvAvg) * 5) - R.en) * ease(0.6);
     R.env *= Math.exp(-dt / 0.19);
-    const m = A.mix;
+    const m = A.mix, g = m * GAIN[level];
     let bs = 0, md = 0, tr = 0;
     for (let b = 0; b < NB; b++) {
-      A.bands[b] = 0.5 + (R.sm[b] - 0.5) * m;
+      A.bands[b] = clamp01(0.5 + (R.sm[b] - 0.5) * g);
       A.peaks[b] = Math.max(A.bands[b], A.peaks[b] - dt * 0.5);
       if (b < 5) bs += R.sm[b]; else if (b < 14) md += R.sm[b]; else tr += R.sm[b];
     }
-    A.bass = 0.5 + (bs / 5 - 0.5) * m;
-    A.mid = 0.5 + (md / 9 - 0.5) * m;
-    A.treble = 0.5 + (tr / 10 - 0.5) * m;
-    A.energy = 0.5 + (R.en - 0.5) * m;
-    A.beat = R.env * m;
+    A.bass = clamp01(0.5 + (bs / 5 - 0.5) * g);
+    A.mid = clamp01(0.5 + (md / 9 - 0.5) * g);
+    A.treble = clamp01(0.5 + (tr / 10 - 0.5) * g);
+    A.energy = clamp01(0.5 + (R.en - 0.5) * g);
+    A.beat = R.env * g;
     A.onset = R.lastBeat !== R.seen && m > 0.3;        // true for the one frame a beat lands
     R.seen = R.lastBeat;
   }
@@ -1115,8 +1121,22 @@
       ctx.fillText(A.state === 'denied' ? 'Audio access declined — the visualiser can’t hear the music'
         : A.state === 'unavailable' ? 'Audio tap unavailable on this TV' : (st.paused ? 'Paused' : 'Listening…'), 112, 74);
     }
-    // mode name, briefly, after a cycle
-    if (tNow < modeUntil) {
+    // intensity, briefly, after a 1 / 3 press — in the mode name's place
+    const lvA = Math.min(1, 2 - (ts - levelAt) / 1000);
+    if (lvA > 0) {
+      ctx.globalAlpha = lvA;
+      const dx = 24, x1 = W - 119, x0 = x1 - dx * 4, y = 66;
+      for (let i = 0; i < 5; i++) {
+        ctx.beginPath(); ctx.arc(x0 + i * dx, y, 7, 0, Math.PI * 2);
+        if (i < level) { ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill(); }
+        else { ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.stroke(); }
+      }
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.font = '600 24px system-ui, sans-serif';
+      ctx.fillText('Intensity', x0 - 20, 74);
+      ctx.globalAlpha = 1;
+    } else if (tNow < modeUntil) {                     // mode name, briefly, after a cycle
       ctx.globalAlpha = Math.min(1, modeUntil - tNow);
       ctx.textAlign = 'right';
       ctx.fillStyle = 'rgba(255,255,255,0.85)';
@@ -1159,18 +1179,25 @@
     cycle(d) {
       mode = (mode + d + AUTO + 1) % (AUTO + 1);   // AUTO sits past the last real mode
       try { localStorage.viz_mode = mode === AUTO ? 'Auto' : MODES[mode]; } catch (e) {}
-      modeUntil = tNow + 2;
+      modeUntil = tNow + 2; levelAt = -1e9;
       if (mode === AUTO) { autoT = 0; autoIdx = 0; autoNextReady = -1; }
       initFor(mode === AUTO ? autoIdx : mode, poolA);
       console.log('[viz] mode:', this.modeName());
       return this.modeName();
     },
     modeName: () => (mode === AUTO ? 'Auto' : MODES[mode]),
+    intensity(d = 0) {
+      level = Math.min(5, Math.max(1, level + d));
+      try { localStorage.viz_intensity = String(level); } catch (e) {}
+      levelAt = performance.now(); modeUntil = 0;
+      console.log('[viz] intensity:', level);
+      return level;
+    },
     setSeekPreview(ms) { seekPreview = ms; },
     flash(txt) { flashTxt = txt; flashT = 1.3; },
     _raw: () => ({ db: [...R.db].map(v => +v.toFixed(1)), lo: [...R.lo].map(v => +v.toFixed(1)), hi: [...R.hi].map(v => +v.toFixed(1)),
                    lv: +R.lv.toFixed(3), lvAvg: +R.lvAvg.toFixed(3), beats: R.beats, fluxDev: +R.fluxDev.toFixed(2) }),
     audio: () => ({ state: A.state, mix: +A.mix.toFixed(2), beat: +A.beat.toFixed(2), bass: +A.bass.toFixed(2),
-                    mid: +A.mid.toFixed(2), treble: +A.treble.toFixed(2), energy: +A.energy.toFixed(2), rms: R.rms }),
+                    mid: +A.mid.toFixed(2), treble: +A.treble.toFixed(2), energy: +A.energy.toFixed(2), rms: R.rms, level }),
   };
 })();

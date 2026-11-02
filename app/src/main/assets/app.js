@@ -174,6 +174,38 @@
     if (sh) sh.textContent = `Shuffle: ${music?.shuffleMode ? 'On' : 'Off'}`;
     const ap = document.querySelector('[data-nav="autoplay"]');
     if (ap) ap.textContent = `Autoplay: ${music?.autoplayEnabled ? 'On' : 'Off'}`;
+    const gl = document.querySelector('[data-nav="gapless"]');
+    if (gl) gl.textContent = `Gapless: ${gaplessPref() ? 'On' : 'Off'}`;
+  }
+  // Gapless is MusicKit's "seamless audio transitions": the next song (and its DRM key) goes to
+  // the decoder already running, so albums that run one track into the next have no gap. Off by
+  // default: on the Bravia that switch sometimes leaves Android's AAC decoder reading garbage
+  // ("error 0x4004, substituting silence", ~12 a second) until something restarts it — dropouts
+  // and crackle through whole tracks. Off, every song gets a fresh decoder and a short gap.
+  const gaplessPref = () => { try { return localStorage.gapless === '1'; } catch (e) { return false; } };
+  // MusicKit copies the flag into each player object as it builds it, so a change mid-session
+  // has to reach those copies as well as the bag that later objects read.
+  function applyGapless(on) {
+    const f = music?._bag?.features;
+    if (f) f['seamless-audio-transitions'] = on;
+    for (const pc of Object.values(music?.playbackControllers || {})) {
+      if ('_isSeamlessAudioTransitionsEnabled' in pc) pc._isSeamlessAudioTransitionsEnabled = on;
+      const pre = pc._preloader;
+      if (pre && 'isSeamlessAudioTransitionsEnabled' in pre) pre.isSeamlessAudioTransitionsEnabled = on;
+    }
+    const ap = window.audioPlayer;          // MusicKit publishes its audio player here itself
+    if (ap && 'isSeamlessAudioTransitionsEnabled' in ap) ap.isSeamlessAudioTransitionsEnabled = on;
+  }
+  function toggleGapless() {
+    const on = !gaplessPref();
+    try { localStorage.gapless = on ? '1' : '0'; } catch (e) {}
+    applyGapless(on);
+    syncToggles(); status(on ? 'Gapless on — songs run straight into each other' : 'Gapless off — a short gap between songs');
+  }
+  // Remote number keys: 1 / 3 turn the visualiser's intensity down / up (1–5).
+  function nudgeIntensity(d) {
+    const n = VIZ.intensity(d);
+    if (screen !== 'viz') toast(`Visualizer intensity ${n} of 5`);
   }
   function toggleShuffle() {
     music.shuffleMode = music.shuffleMode ? 0 : 1;      // MusicKit.PlayerShuffleMode: off / songs
@@ -487,6 +519,7 @@
     if (v.name === 'viz') { openViz(); return; }     // overlay: leave the current view intact underneath
     if (v.name === 'shuffle') { toggleShuffle(); return; }   // toggles, not destinations
     if (v.name === 'autoplay') { toggleAutoplay(); return; }
+    if (v.name === 'gapless') { toggleGapless(); return; }
     if (v.name === 'logout') { views.logout(); return; }
     view = v; if (!views[v.name]) return;
     main.innerHTML = '<div class="title">Loading…</div>';
@@ -531,6 +564,8 @@
       else if (k === 'ArrowLeft' || k === 'MediaTrackPrevious') prev();
       else if (k === 'ArrowUp') VIZ.cycle(1);        // D-pad up/down: the one control every
       else if (k === 'ArrowDown') VIZ.cycle(-1);     // Android TV remote has and we don't use
+      else if (k === '1') VIZ.intensity(-1);
+      else if (k === '3') VIZ.intensity(1);
       else return;
       e.preventDefault(); return;
     }
@@ -544,6 +579,7 @@
     else if (isOk(e)) activateFocused();
     else if (k === 'MediaPlayPause') togglePlay();
     else if (k === 'MediaTrackNext') next(); else if (k === 'MediaTrackPrevious') prev();
+    else if (k === '1') nudgeIntensity(-1); else if (k === '3') nudgeIntensity(1);
     else return;
     e.preventDefault();
   });
@@ -621,7 +657,11 @@
     if (!CONFIG.developerToken) return showSetup('This build has no MusicKit developer token.');
     if (exp && exp < new Date()) return showSetup(`The MusicKit developer token expired on ${CONFIG.tokenExpires}.`);
     try {
-      music = await MusicKit.configure({ developerToken: CONFIG.developerToken, app: { name: CONFIG.appName || 'Nocturnify', build: '0.1' } });
+      music = await MusicKit.configure({
+        developerToken: CONFIG.developerToken,
+        app: { name: CONFIG.appName || 'Nocturnify', build: '0.1' },
+        features: [gaplessPref() ? 'seamless-audio-transitions' : '-seamless-audio-transitions'],   // see toggleGapless
+      });
     } catch (e) { return showSetup('MusicKit wouldn’t start: ' + (e?.message || e)); }
     window.music = music;   // handy from the remote debugger
     music.addEventListener('nowPlayingItemDidChange', () => { liveMeta = null; renderNow(); markPlaying(); pushNative(); refreshLove(); });
